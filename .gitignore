@@ -1,0 +1,38 @@
+# ESP-IDF build output and local config
+**/build/
+**/managed_components/
+**/sdkconfig
+**/sdkconfig.old
+**/.cache/
+**/.vscode/
+
+# Firmware images and generated binaries
+*.bin
+*.elf
+*.map
+*.uf2
+*.hex
+
+# Large vendor tools and duplicated flash packages
+Flash_download/
+bin/
+7-工具软件_Tool_software/
+8-快速使用_Quick_Start/Flash_download/
+8-快速使用_Quick_Start/bin/
+
+# Compressed installers/tool archives
+*.zip
+*.rar
+*.7z
+*.tar
+*.gz
+
+# Vendor Arduino examples include large bundles and sample credentials.
+1-示例程序Demo/Arduino/
+
+# Large optional Arduino library bundles
+1-示例程序Demo/Arduino/Install libraries/
+
+# Local editor and OS files
+Thumbs.db
+.DS_Store
