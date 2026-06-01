@@ -22,7 +22,7 @@
 
 static const char *TAG = "app_net";
 static const char *PORTAL_SSID = "xiaozhi-setup";
-static const char *PORTAL_IP = "192.168.4.1";
+static const char *PORTAL_IP = "192.168.10.1";
 static const int CONNECTED_BIT = BIT0;
 static const int MAX_WIFI_CREDENTIALS = 3;
 
@@ -124,9 +124,16 @@ static void configure_portal_dhcp_options(void)
     dns.ip.type = IPADDR_TYPE_V4;
 
     uint8_t dhcps_offer_dns = 0x02;
-    const char *portal_uri = "http://192.168.4.1/";
+    esp_netif_ip_info_t ip_info = {};
+    ip_info.ip.addr = inet_addr(PORTAL_IP);
+    ip_info.gw.addr = inet_addr(PORTAL_IP);
+    ip_info.netmask.addr = inet_addr("255.255.255.0");
+
+    static char portal_uri[32];
+    snprintf(portal_uri, sizeof(portal_uri), "http://%s/", PORTAL_IP);
 
     ESP_ERROR_CHECK_WITHOUT_ABORT(esp_netif_dhcps_stop(s_ap_netif));
+    ESP_ERROR_CHECK_WITHOUT_ABORT(esp_netif_set_ip_info(s_ap_netif, &ip_info));
     ESP_ERROR_CHECK_WITHOUT_ABORT(esp_netif_dhcps_option(
         s_ap_netif, ESP_NETIF_OP_SET, ESP_NETIF_DOMAIN_NAME_SERVER,
         &dhcps_offer_dns, sizeof(dhcps_offer_dns)));
@@ -325,7 +332,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
         } else {
             s_retry_count = 0;
             s_active_credential = 0;
-            app_ui_set_network_status("WiFi setup: join xiaozhi-setup, open 192.168.4.1");
+            app_ui_set_network_status("WiFi setup: join xiaozhi-setup, open 192.168.10.1");
         }
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_AP_STACONNECTED) {
         const wifi_event_ap_staconnected_t *event = (const wifi_event_ap_staconnected_t *)event_data;
@@ -415,7 +422,7 @@ static esp_err_t serve_setup_page(httpd_req_t *req, bool scan)
         "<label>Longitude</label><input name='lon' placeholder='121.4737' inputmode='decimal'>"
         "<button>Save and Connect</button></form>"
         "<p class='muted'>The board remembers the latest 3 networks and reconnects automatically.</p>"
-        "<p class='muted'>Setup AP: xiaozhi-setup, no password.</p></body></html>";
+        "<p class='muted'>Setup AP: xiaozhi-setup, no password. Manual URL: http://192.168.10.1/</p></body></html>";
 
     httpd_resp_set_type(req, "text/html");
     httpd_resp_send_chunk(req, head, HTTPD_RESP_USE_STRLEN);
@@ -682,7 +689,7 @@ void app_net_start(void)
     if (s_credential_count > 0) {
         connect_sta();
     } else {
-        app_ui_set_network_status("WiFi setup: join xiaozhi-setup, open 192.168.4.1");
+        app_ui_set_network_status("WiFi setup: join xiaozhi-setup, open 192.168.10.1");
     }
 }
 

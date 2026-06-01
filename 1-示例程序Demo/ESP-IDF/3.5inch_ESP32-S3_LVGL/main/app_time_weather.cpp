@@ -9,6 +9,7 @@
 #include "app_net.h"
 #include "app_ui.h"
 #include "cJSON.h"
+#include "esp_crt_bundle.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_sntp.h"
@@ -19,6 +20,42 @@
 static const char *TAG = "app_time_weather";
 
 static bool s_sntp_started;
+static int s_last_quote_yday = -1;
+static constexpr size_t WEATHER_RESPONSE_SIZE = 1536;
+
+static const char *DAILY_QUOTES[] = {
+    "Stay patient and trust your next small step.",
+    "Make today lighter, clearer, and a little braver.",
+    "A calm mind turns hard work into steady progress.",
+    "Do the useful thing first; confidence follows.",
+    "Small wins compound when you keep showing up.",
+    "The day opens when attention becomes simple.",
+    "Less noise, more signal, one good move at a time.",
+    "What you build with care keeps working for you.",
+    "Begin before it feels perfect.",
+    "Clarity is made by moving, not waiting.",
+    "A focused hour can change the shape of the day.",
+    "Keep the promise small enough to keep.",
+    "Good work is quiet before it is obvious.",
+    "Choose the next honest action.",
+    "Energy follows direction.",
+    "Steady is faster than scattered.",
+    "Leave the page better than you found it.",
+    "The future likes prepared hands.",
+    "One clean decision clears a crowded room.",
+    "Build the rhythm, then let the rhythm carry you.",
+    "You do not need more pressure; you need a clearer path.",
+    "Attention is the first form of care.",
+    "Progress often sounds like a quiet yes.",
+    "Make room for the better version to arrive.",
+    "The work becomes easier when the next step is visible.",
+    "Trust repetition. It is how skill learns your name.",
+    "A good day starts by removing one needless thing.",
+    "Let the simple thing be enough to begin.",
+    "Direction beats intensity when the road is long.",
+    "Your next step is allowed to be modest.",
+    "Keep your standards high and your breath slow.",
+};
 
 struct WeatherLocation {
     char city[32];
@@ -123,6 +160,11 @@ static void update_time_ui(void)
         return;
     }
     app_ui_set_time(info.tm_hour, info.tm_min, info.tm_mon + 1, info.tm_mday, weekday_name(info.tm_wday));
+    if (info.tm_yday != s_last_quote_yday) {
+        s_last_quote_yday = info.tm_yday;
+        const size_t quote_count = sizeof(DAILY_QUOTES) / sizeof(DAILY_QUOTES[0]);
+        app_ui_set_daily_quote(DAILY_QUOTES[info.tm_yday % quote_count]);
+    }
 }
 
 static esp_err_t http_event_handler(esp_http_client_event_t *evt)
@@ -130,7 +172,7 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
     if (evt->event_id == HTTP_EVENT_ON_DATA && evt->user_data && evt->data_len > 0) {
         char *buf = (char *)evt->user_data;
         size_t used = strlen(buf);
-        size_t room = 1024 - used - 1;
+        size_t room = WEATHER_RESPONSE_SIZE - used - 1;
         size_t copy = evt->data_len < (int)room ? evt->data_len : room;
         memcpy(buf + used, evt->data, copy);
         buf[used + copy] = 0;
@@ -138,25 +180,26 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
     return ESP_OK;
 }
 
-static void fetch_weather(void)
+static bool fetch_weather(void)
 {
     WeatherLocation location = {};
     load_weather_location(&location);
 
     char url[256];
     snprintf(url, sizeof(url),
-             "http://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f&current=temperature_2m,weather_code&timezone=Asia%%2FShanghai",
+             "https://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f&current=temperature_2m,weather_code&timezone=Asia%%2FShanghai",
              location.latitude, location.longitude);
 
-    char response[1024] = {};
+    char response[1536] = {};
     esp_http_client_config_t config = {};
     config.url = url;
     config.timeout_ms = 8000;
     config.event_handler = http_event_handler;
     config.user_data = response;
+    config.crt_bundle_attach = esp_crt_bundle_attach;
     esp_http_client_handle_t client = esp_http_client_init(&config);
     if (!client) {
-        return;
+        return false;
     }
 
     esp_err_t err = esp_http_client_perform(client);
@@ -164,8 +207,10 @@ static void fetch_weather(void)
     esp_http_client_cleanup(client);
     if (err != ESP_OK || status < 200 || status >= 300 || response[0] == 0) {
         ESP_LOGW(TAG, "weather fetch failed err=%s status=%d", esp_err_to_name(err), status);
-        app_ui_set_weather("-- C", "Weather pending", -1);
-        return;
+        char fail_text[32];
+        snprintf(fail_text, sizeof(fail_text), "Weather %d", status);
+        app_ui_set_weather("-- C", fail_text, -1);
+        return false;
     }
 
     cJSON *root = cJSON_Parse(response);
@@ -173,9 +218,10 @@ static void fetch_weather(void)
     cJSON *temp = current ? cJSON_GetObjectItem(current, "temperature_2m") : NULL;
     cJSON *code = current ? cJSON_GetObjectItem(current, "weather_code") : NULL;
     if (!cJSON_IsNumber(temp) || !cJSON_IsNumber(code)) {
+        ESP_LOGW(TAG, "weather parse failed: %.96s", response);
         cJSON_Delete(root);
-        app_ui_set_weather("-- C", "Weather pending", -1);
-        return;
+        app_ui_set_weather("-- C", "Weather parse", -1);
+        return false;
     }
 
     char temp_text[16];
@@ -184,12 +230,16 @@ static void fetch_weather(void)
     snprintf(summary, sizeof(summary), "%s %s", location.city, weather_desc(code->valueint));
     app_ui_set_weather(temp_text, summary, code->valueint);
     cJSON_Delete(root);
+    ESP_LOGI(TAG, "weather ok %s %s code=%d", temp_text, summary, code->valueint);
+    return true;
 }
 
 static void time_weather_task(void *arg)
 {
     (void)arg;
     int weather_ticks = 3600;
+    int retry_ticks = 3600;
+    bool weather_ok = false;
     while (true) {
         if (!app_net_wait_connected(30000)) {
             app_ui_set_network_status("Waiting for WiFi. Setup AP: xiaozhi-setup");
@@ -202,8 +252,13 @@ static void time_weather_task(void *arg)
         }
 
         if (weather_ticks >= 3600) {
-            fetch_weather();
+            app_ui_set_weather("-- C", "Weather sync", -1);
+            weather_ok = fetch_weather();
             weather_ticks = 0;
+            retry_ticks = 0;
+        } else if (!weather_ok && retry_ticks >= 30) {
+            weather_ok = fetch_weather();
+            retry_ticks = 0;
         }
 
         for (int i = 0; i < 60; ++i) {
@@ -212,6 +267,7 @@ static void time_weather_task(void *arg)
             }
             vTaskDelay(pdMS_TO_TICKS(1000));
             ++weather_ticks;
+            ++retry_ticks;
         }
         update_time_ui();
     }

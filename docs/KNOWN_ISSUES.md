@@ -6,7 +6,7 @@ Some phones may not automatically open the captive portal page.
 
 Fallback:
 
-`http://192.168.4.1/`
+`http://192.168.10.1/`
 
 The current firmware handles common phone probes and DNS hijack, but captive portal UI is ultimately controlled by the phone OS.
 

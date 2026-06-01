@@ -6,15 +6,15 @@ The board starts a phone setup hotspot:
 
 - SSID: `xiaozhi-setup`
 - Auth: open, no password
-- Setup IP: `192.168.4.1`
-- DNS hijack: all A-record queries point to `192.168.4.1`
-- Captive portal URL: `http://192.168.4.1/`
+- Setup IP: `192.168.10.1`
+- DNS hijack: all A-record queries point to `192.168.10.1`
+- Captive portal URL: `http://192.168.10.1/`
 
 The phone connects to `xiaozhi-setup`, then the portal page is opened automatically when the phone OS supports captive portal detection.
 
 If the phone does not pop up the browser, open this URL manually:
 
-`http://192.168.4.1/`
+`http://192.168.10.1/`
 
 ## Scan and Save Flow
 
@@ -23,7 +23,7 @@ The portal does not auto-scan on first load. This is intentional because automat
 Flow:
 
 1. Phone joins `xiaozhi-setup`.
-2. Open `http://192.168.4.1/`.
+2. Open `http://192.168.10.1/`.
 3. Press `Scan WiFi`.
 4. Select nearby SSID.
 5. Enter WiFi password.
@@ -83,7 +83,7 @@ timezone=Asia/Shanghai
 Current endpoint shape:
 
 ```text
-http://api.open-meteo.com/v1/forecast?latitude=31.2304&longitude=121.4737&current=temperature_2m,weather_code&timezone=Asia%2FShanghai
+https://api.open-meteo.com/v1/forecast?latitude=31.2304&longitude=121.4737&current=temperature_2m,weather_code&timezone=Asia%2FShanghai
 ```
 
 The UI is updated through:

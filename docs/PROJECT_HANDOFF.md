@@ -15,7 +15,7 @@ Main ESP-IDF project:
 Key files:
 
 - `main/main.cpp`: board startup, LVGL task, UI startup, network startup, time/weather startup
-- `main/app_ui.cpp`: current home/apps UI, time/weather/quote panels, swipe page switching
+- `main/app_ui.cpp`: current home/apps UI, time/weather/daily-quote panels, swipe page switching
 - `main/app_ui.h`: UI update API
 - `main/app_net.cpp`: WiFi AP, captive portal, DNS hijack, NVS credential memory
 - `main/app_net.h`: network startup API
@@ -40,8 +40,8 @@ Last verified board setup:
 Last known important boot logs:
 
 ```text
-DHCP portal options: dns=192.168.4.1 uri=http://192.168.4.1/
-setup AP started: SSID=xiaozhi-setup auth=open channel=1 ip=192.168.4.1
+DHCP portal options: dns=192.168.10.1 uri=http://192.168.10.1/
+setup AP started: SSID=xiaozhi-setup auth=open channel=1 ip=192.168.10.1
 ```
 
 ## Build Notes
@@ -72,7 +72,7 @@ Home page:
 - Date/week display
 - Flip-style clock cards with blinking colon
 - Weather area with animated sun/cloud/rain/storm states
-- Quote/status area with enough room for longer text
+- Daily quote/status area with enough room for longer text
 
 Apps page:
 

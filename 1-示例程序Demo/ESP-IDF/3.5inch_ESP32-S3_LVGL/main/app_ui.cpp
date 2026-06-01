@@ -33,6 +33,7 @@ static lv_obj_t *weather_cloud_c;
 static lv_obj_t *weather_rain[3];
 static lv_obj_t *weather_bolt;
 static lv_obj_t *quote_label;
+static lv_obj_t *network_status_label;
 static uint8_t clock_digits[4] = {1, 4, 2, 8};
 
 static lv_style_t style_screen;
@@ -533,11 +534,17 @@ static void create_main_page(lv_obj_t *root)
     lv_obj_t *quote_title = label_en(quote_panel, "Quote", &style_gold);
     lv_obj_align(quote_title, LV_ALIGN_TOP_LEFT, 16, 9);
 
-    quote_label = label_en(quote_panel, "WiFi setup: join xiaozhi-setup, open 192.168.4.1", &style_en);
+    quote_label = label_en(quote_panel, "Every sunrise is a fresh chance to begin again.", &style_en);
     lv_obj_set_width(quote_label, 405);
     lv_label_set_long_mode(quote_label, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(quote_label, &lv_font_montserrat_16, 0);
     lv_obj_align(quote_label, LV_ALIGN_TOP_LEFT, 16, 32);
+
+    network_status_label = label_en(quote_panel, "WiFi setup: join xiaozhi-setup, open 192.168.10.1", &style_muted);
+    lv_obj_set_width(network_status_label, 405);
+    lv_label_set_long_mode(network_status_label, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_font(network_status_label, &lv_font_montserrat_12, 0);
+    lv_obj_align(network_status_label, LV_ALIGN_BOTTOM_LEFT, 16, -7);
 
     lv_obj_t *menu = create_button(main_page, "Menu", menu_event_cb);
     lv_obj_align(menu, LV_ALIGN_TOP_RIGHT, -18, 10);
@@ -633,11 +640,11 @@ void app_ui_touch_update(uint16_t x, uint16_t y, uint8_t point_count)
 
 void app_ui_set_network_status(const char *status)
 {
-    if (!quote_label || !status) {
+    if (!network_status_label || !status) {
         return;
     }
     if (lvgl_port_lock(0)) {
-        lv_label_set_text(quote_label, status);
+        lv_label_set_text(network_status_label, status);
         lvgl_port_unlock();
     }
 }
@@ -653,6 +660,17 @@ void app_ui_set_time(int hour, int minute, int month, int day, const char *weekd
         render_big_time(hour, minute, true);
         lv_label_set_text(date_label, date_text);
         lv_label_set_text(week_label, weekday ? weekday : "---");
+        lvgl_port_unlock();
+    }
+}
+
+void app_ui_set_daily_quote(const char *quote)
+{
+    if (!quote_label || !quote) {
+        return;
+    }
+    if (lvgl_port_lock(0)) {
+        lv_label_set_text(quote_label, quote);
         lvgl_port_unlock();
     }
 }
