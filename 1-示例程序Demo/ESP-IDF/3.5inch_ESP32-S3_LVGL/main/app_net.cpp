@@ -196,6 +196,50 @@ static esp_err_t load_credentials(void)
     return s_credential_count > 0 ? ESP_OK : ESP_ERR_NVS_NOT_FOUND;
 }
 
+static esp_err_t save_weather_settings(const char *city, const char *latitude, const char *longitude)
+{
+    bool has_location = latitude && latitude[0] && longitude && longitude[0];
+    bool has_city = city && city[0];
+    if (!has_location && !has_city) {
+        return ESP_OK;
+    }
+
+    if (has_location) {
+        char *end = NULL;
+        double lat = strtod(latitude, &end);
+        bool lat_ok = end && *end == 0 && lat >= -90.0 && lat <= 90.0;
+        end = NULL;
+        double lon = strtod(longitude, &end);
+        bool lon_ok = end && *end == 0 && lon >= -180.0 && lon <= 180.0;
+        if (!lat_ok || !lon_ok) {
+            ESP_LOGW(TAG, "ignore invalid weather location lat=%s lon=%s", latitude, longitude);
+            return ESP_OK;
+        }
+    }
+
+    nvs_handle_t nvs;
+    esp_err_t err = nvs_open("weather_cfg", NVS_READWRITE, &nvs);
+    if (err != ESP_OK) {
+        return err;
+    }
+    if (has_city) {
+        ESP_ERROR_CHECK_WITHOUT_ABORT(nvs_set_str(nvs, "city", city));
+    }
+    if (has_location) {
+        ESP_ERROR_CHECK_WITHOUT_ABORT(nvs_set_str(nvs, "lat", latitude));
+        ESP_ERROR_CHECK_WITHOUT_ABORT(nvs_set_str(nvs, "lon", longitude));
+    }
+    err = nvs_commit(nvs);
+    nvs_close(nvs);
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "saved weather location city=%s lat=%s lon=%s",
+                 has_city ? city : "(unchanged)",
+                 has_location ? latitude : "(unchanged)",
+                 has_location ? longitude : "(unchanged)");
+    }
+    return err;
+}
+
 esp_err_t app_net_save_credentials(const char *ssid, const char *password)
 {
     WifiCredential updated[MAX_WIFI_CREDENTIALS] = {};
@@ -366,6 +410,9 @@ static esp_err_t serve_setup_page(httpd_req_t *req, bool scan)
     const char *tail =
         "</select><label>Or type SSID manually</label><input name='manual_ssid' placeholder='WiFi SSID'>"
         "<label>Password</label><input name='pass' placeholder='WiFi password' type='password'>"
+        "<label>Weather city</label><input name='city' placeholder='Shanghai'>"
+        "<label>Latitude</label><input name='lat' placeholder='31.2304' inputmode='decimal'>"
+        "<label>Longitude</label><input name='lon' placeholder='121.4737' inputmode='decimal'>"
         "<button>Save and Connect</button></form>"
         "<p class='muted'>The board remembers the latest 3 networks and reconnects automatically.</p>"
         "<p class='muted'>Setup AP: xiaozhi-setup, no password.</p></body></html>";
@@ -389,7 +436,7 @@ static esp_err_t scan_get_handler(httpd_req_t *req)
 
 static esp_err_t save_post_handler(httpd_req_t *req)
 {
-    char body[192] = {};
+    char body[512] = {};
     int remaining = req->content_len;
     int offset = 0;
     while (remaining > 0 && offset < (int)sizeof(body) - 1) {
@@ -404,6 +451,9 @@ static esp_err_t save_post_handler(httpd_req_t *req)
     char ssid[33] = {};
     char manual_ssid[33] = {};
     char pass[65] = {};
+    char city[32] = {};
+    char latitude[24] = {};
+    char longitude[24] = {};
     form_value(body, "ssid", ssid, sizeof(ssid));
     form_value(body, "manual_ssid", manual_ssid, sizeof(manual_ssid));
     if (manual_ssid[0] != 0) {
@@ -414,10 +464,18 @@ static esp_err_t save_post_handler(httpd_req_t *req)
         return ESP_OK;
     }
     form_value(body, "pass", pass, sizeof(pass));
+    form_value(body, "city", city, sizeof(city));
+    form_value(body, "lat", latitude, sizeof(latitude));
+    form_value(body, "lon", longitude, sizeof(longitude));
 
     esp_err_t err = app_net_save_credentials(ssid, pass);
     if (err != ESP_OK) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "NVS save failed");
+        return ESP_OK;
+    }
+    err = save_weather_settings(city, latitude, longitude);
+    if (err != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Weather save failed");
         return ESP_OK;
     }
 

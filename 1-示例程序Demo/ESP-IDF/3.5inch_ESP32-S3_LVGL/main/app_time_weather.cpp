@@ -2,6 +2,7 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
@@ -13,12 +14,17 @@
 #include "esp_sntp.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "nvs.h"
 
 static const char *TAG = "app_time_weather";
-static const char *WEATHER_URL =
-    "http://api.open-meteo.com/v1/forecast?latitude=31.2304&longitude=121.4737&current=temperature_2m,weather_code&timezone=Asia%2FShanghai";
 
 static bool s_sntp_started;
+
+struct WeatherLocation {
+    char city[32];
+    double latitude;
+    double longitude;
+};
 
 static const char *weekday_name(int wday)
 {
@@ -38,6 +44,42 @@ static const char *weather_desc(int code)
     if (code >= 71 && code <= 77) return "Snow";
     if (code >= 95) return "Storm";
     return "Weather";
+}
+
+static void load_weather_location(WeatherLocation *location)
+{
+    strlcpy(location->city, "Shanghai", sizeof(location->city));
+    location->latitude = 31.2304;
+    location->longitude = 121.4737;
+
+    nvs_handle_t nvs;
+    if (nvs_open("weather_cfg", NVS_READONLY, &nvs) != ESP_OK) {
+        return;
+    }
+
+    size_t city_len = sizeof(location->city);
+    if (nvs_get_str(nvs, "city", location->city, &city_len) != ESP_OK || location->city[0] == 0) {
+        strlcpy(location->city, "My City", sizeof(location->city));
+    }
+
+    char lat_text[24] = {};
+    char lon_text[24] = {};
+    size_t lat_len = sizeof(lat_text);
+    size_t lon_len = sizeof(lon_text);
+    if (nvs_get_str(nvs, "lat", lat_text, &lat_len) == ESP_OK &&
+        nvs_get_str(nvs, "lon", lon_text, &lon_len) == ESP_OK) {
+        char *end = NULL;
+        double lat = strtod(lat_text, &end);
+        bool lat_ok = end && *end == 0 && lat >= -90.0 && lat <= 90.0;
+        end = NULL;
+        double lon = strtod(lon_text, &end);
+        bool lon_ok = end && *end == 0 && lon >= -180.0 && lon <= 180.0;
+        if (lat_ok && lon_ok) {
+            location->latitude = lat;
+            location->longitude = lon;
+        }
+    }
+    nvs_close(nvs);
 }
 
 static void start_sntp_once(void)
@@ -98,9 +140,17 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt)
 
 static void fetch_weather(void)
 {
+    WeatherLocation location = {};
+    load_weather_location(&location);
+
+    char url[256];
+    snprintf(url, sizeof(url),
+             "http://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f&current=temperature_2m,weather_code&timezone=Asia%%2FShanghai",
+             location.latitude, location.longitude);
+
     char response[1024] = {};
     esp_http_client_config_t config = {};
-    config.url = WEATHER_URL;
+    config.url = url;
     config.timeout_ms = 8000;
     config.event_handler = http_event_handler;
     config.user_data = response;
@@ -114,7 +164,7 @@ static void fetch_weather(void)
     esp_http_client_cleanup(client);
     if (err != ESP_OK || status < 200 || status >= 300 || response[0] == 0) {
         ESP_LOGW(TAG, "weather fetch failed err=%s status=%d", esp_err_to_name(err), status);
-        app_ui_set_weather("-- C", "Weather pending");
+        app_ui_set_weather("-- C", "Weather pending", -1);
         return;
     }
 
@@ -124,13 +174,15 @@ static void fetch_weather(void)
     cJSON *code = current ? cJSON_GetObjectItem(current, "weather_code") : NULL;
     if (!cJSON_IsNumber(temp) || !cJSON_IsNumber(code)) {
         cJSON_Delete(root);
-        app_ui_set_weather("-- C", "Weather pending");
+        app_ui_set_weather("-- C", "Weather pending", -1);
         return;
     }
 
     char temp_text[16];
+    char summary[48];
     snprintf(temp_text, sizeof(temp_text), "%d C", (int)lround(temp->valuedouble));
-    app_ui_set_weather(temp_text, weather_desc(code->valueint));
+    snprintf(summary, sizeof(summary), "%s %s", location.city, weather_desc(code->valueint));
+    app_ui_set_weather(temp_text, summary, code->valueint);
     cJSON_Delete(root);
 }
 

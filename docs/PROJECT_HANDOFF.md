@@ -35,6 +35,7 @@ Last verified board setup:
 - Captive portal works after increasing HTTP server stack
 - WiFi credential save and reconnect path is implemented
 - Time/weather task starts after WiFi connects
+- Weather city/latitude/longitude can be saved from the phone setup portal
 
 Last known important boot logs:
 
@@ -69,7 +70,8 @@ Home page:
 
 - Large clock
 - Date/week display
-- Weather area with reserved animation space
+- Flip-style clock cards with blinking colon
+- Weather area with animated sun/cloud/rain/storm states
 - Quote/status area with enough room for longer text
 
 Apps page:

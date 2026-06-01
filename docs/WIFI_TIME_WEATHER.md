@@ -27,7 +27,8 @@ Flow:
 3. Press `Scan WiFi`.
 4. Select nearby SSID.
 5. Enter WiFi password.
-6. Save.
+6. Optionally enter weather city, latitude, and longitude.
+7. Save.
 
 The firmware stores up to 3 credential sets in NVS under namespace `wifi_cfg`:
 
@@ -71,7 +72,7 @@ The UI is updated through:
 
 Weather is currently fetched from Open-Meteo without an API key.
 
-Current location is hardcoded to Shanghai:
+Default location is Shanghai:
 
 ```text
 latitude=31.2304
@@ -89,9 +90,14 @@ The UI is updated through:
 
 - `app_ui_set_weather(...)`
 
+The phone setup portal can now store a custom weather location in NVS namespace `weather_cfg`:
+
+- `city`
+- `lat`
+- `lon`
+
 Next improvement:
 
-- Add location setting in the phone setup portal
-- Store location in NVS
+- Replace manual latitude/longitude input with city search
 - Add weather animation assets for sunny/cloudy/rain/thunder/fog
 - Refresh weather on a timer and after WiFi reconnect
