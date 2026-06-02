@@ -14,6 +14,7 @@ void app_ui_set_time(int hour, int minute, int month, int day, const char *weekd
 void app_ui_set_daily_quote(const char *quote);
 void app_ui_set_weather(const char *temperature, const char *summary, int weather_code);
 void app_ui_set_radio(const char *station, const char *state, const char *meta);
+void app_ui_set_xiaozhi(const char *state, const char *message, const char *emotion);
 
 #ifdef __cplusplus
 }

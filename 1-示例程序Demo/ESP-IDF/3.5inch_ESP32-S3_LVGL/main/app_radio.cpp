@@ -116,6 +116,7 @@ static void handle_command(RadioCommand command)
         s_stop_requested = true;
         app_audio_set_stop_requested(true);
         app_audio_mute_output();
+        app_audio_release(APP_AUDIO_OWNER_RADIO);
         set_station_ui("Stopped", "Ready");
         break;
     case RADIO_CMD_NEXT:
@@ -258,9 +259,9 @@ static bool write_frame_pcm(int16_t *pcm, const MP3FrameInfo *info)
         return false;
     }
 
-    if (info->samprate <= 0 || app_audio_set_sample_rate(info->samprate) != ESP_OK) {
+    if (info->samprate <= 0 || !app_audio_acquire(APP_AUDIO_OWNER_RADIO, info->samprate)) {
         ESP_LOGW(TAG, "unsupported sample rate %d", info->samprate);
-        set_station_ui("Unsupported", "Bad sample rate");
+        set_station_ui("Audio busy", "XiaoZhi is using audio");
         return false;
     }
 
@@ -494,6 +495,7 @@ static bool stream_play_url(const RadioStation *station, const char *url, int ur
     heap_caps_free(pcm_buffer);
     esp_http_client_close(client);
     esp_http_client_cleanup(client);
+    app_audio_release(APP_AUDIO_OWNER_RADIO);
     return decoded_frames > 0;
 }
 
@@ -574,6 +576,7 @@ void app_radio_stop(void)
     s_stop_requested = true;
     app_audio_set_stop_requested(true);
     app_audio_mute_output();
+    app_audio_release(APP_AUDIO_OWNER_RADIO);
     post_command(RADIO_CMD_STOP);
 }
 

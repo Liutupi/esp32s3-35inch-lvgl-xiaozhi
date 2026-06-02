@@ -7,6 +7,7 @@
 #include "esp_codec_dev_defaults.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 
 static const char *TAG = "app_audio";
@@ -20,13 +21,17 @@ static constexpr gpio_num_t PIN_I2S_LRCK = GPIO_NUM_21;
 static constexpr uint32_t AUDIO_SAMPLE_RATE_HZ = 44100;
 
 static i2s_chan_handle_t s_tx_chan;
+static i2s_chan_handle_t s_rx_chan;
 static esp_codec_dev_handle_t s_codec_dev;
 static bool s_audio_started;
 static bool s_tx_enabled;
+static bool s_rx_enabled;
 static bool s_codec_seen;
 static bool s_codec_open;
 static uint32_t s_sample_rate_hz = AUDIO_SAMPLE_RATE_HZ;
 static volatile bool s_stop_requested;
+static SemaphoreHandle_t s_audio_mutex;
+static app_audio_owner_t s_audio_owner = APP_AUDIO_OWNER_NONE;
 
 void app_audio_set_amp_enabled(bool enabled)
 {
@@ -72,10 +77,12 @@ static void probe_codec(i2c_master_bus_handle_t i2c_bus)
     }
 }
 
-static esp_err_t init_i2s_tx(void)
+static esp_err_t init_i2s_duplex(void)
 {
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
-    esp_err_t err = i2s_new_channel(&chan_cfg, &s_tx_chan, NULL);
+    chan_cfg.dma_desc_num = 6;
+    chan_cfg.dma_frame_num = 240;
+    esp_err_t err = i2s_new_channel(&chan_cfg, &s_tx_chan, &s_rx_chan);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "i2s_new_channel failed: %s", esp_err_to_name(err));
         return err;
@@ -96,7 +103,12 @@ static esp_err_t init_i2s_tx(void)
 
     err = i2s_channel_init_std_mode(s_tx_chan, &std_cfg);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "i2s_channel_init_std_mode failed: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "i2s TX init failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    err = i2s_channel_init_std_mode(s_rx_chan, &std_cfg);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "i2s RX init failed: %s", esp_err_to_name(err));
         return err;
     }
 
@@ -106,15 +118,21 @@ static esp_err_t init_i2s_tx(void)
         return err;
     }
     s_tx_enabled = true;
+    err = i2s_channel_enable(s_rx_chan);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "i2s RX enable failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    s_rx_enabled = true;
 
-    ESP_LOGI(TAG, "I2S TX ready mclk=%d bclk=%d lrck=%d dout=%d din=%d slot=32",
+    ESP_LOGI(TAG, "I2S duplex ready mclk=%d bclk=%d lrck=%d dout=%d din=%d slot=32",
              PIN_I2S_MCLK, PIN_I2S_BCLK, PIN_I2S_LRCK, PIN_I2S_DOUT, PIN_I2S_DIN);
     return ESP_OK;
 }
 
 static esp_err_t open_es8311(i2c_master_bus_handle_t i2c_bus)
 {
-    if (!i2c_bus || !s_tx_chan || !s_codec_seen) {
+    if (!i2c_bus || !s_tx_chan || !s_rx_chan || !s_codec_seen) {
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -131,6 +149,7 @@ static esp_err_t open_es8311(i2c_master_bus_handle_t i2c_bus)
     audio_codec_i2s_cfg_t i2s_cfg = {};
     i2s_cfg.port = I2S_NUM_0;
     i2s_cfg.tx_handle = s_tx_chan;
+    i2s_cfg.rx_handle = s_rx_chan;
     const audio_codec_data_if_t *data_if = audio_codec_new_i2s_data(&i2s_cfg);
     if (!data_if) {
         ESP_LOGE(TAG, "create codec i2s data failed");
@@ -146,7 +165,7 @@ static esp_err_t open_es8311(i2c_master_bus_handle_t i2c_bus)
     es8311_codec_cfg_t es8311_cfg = {};
     es8311_cfg.ctrl_if = ctrl_if;
     es8311_cfg.gpio_if = gpio_if;
-    es8311_cfg.codec_mode = ESP_CODEC_DEV_WORK_MODE_DAC;
+    es8311_cfg.codec_mode = ESP_CODEC_DEV_WORK_MODE_BOTH;
     es8311_cfg.master_mode = false;
     es8311_cfg.use_mclk = true;
     es8311_cfg.pa_pin = PIN_AUDIO_PA_EN;
@@ -161,7 +180,7 @@ static esp_err_t open_es8311(i2c_master_bus_handle_t i2c_bus)
     }
 
     esp_codec_dev_cfg_t dev_cfg = {};
-    dev_cfg.dev_type = ESP_CODEC_DEV_TYPE_OUT;
+    dev_cfg.dev_type = ESP_CODEC_DEV_TYPE_IN_OUT;
     dev_cfg.codec_if = codec_if;
     dev_cfg.data_if = data_if;
     s_codec_dev = esp_codec_dev_new(&dev_cfg);
@@ -186,10 +205,13 @@ static esp_err_t open_es8311(i2c_master_bus_handle_t i2c_bus)
     if (esp_codec_dev_set_out_mute(s_codec_dev, false) != ESP_CODEC_DEV_OK) {
         ESP_LOGW(TAG, "unmute ES8311 failed");
     }
+    if (esp_codec_dev_set_in_gain(s_codec_dev, 30.0) != ESP_CODEC_DEV_OK) {
+        ESP_LOGW(TAG, "set ES8311 mic gain failed");
+    }
     app_audio_set_amp_enabled(true);
 
     s_codec_open = true;
-    ESP_LOGI(TAG, "ES8311 codec opened, volume=75, sample_rate=%lu, 16-bit output, unmuted, amp enabled",
+    ESP_LOGI(TAG, "ES8311 codec opened, volume=75, mic_gain=30, sample_rate=%lu, 16-bit duplex, unmuted, amp enabled",
              (unsigned long)s_sample_rate_hz);
     return ESP_OK;
 }
@@ -210,6 +232,48 @@ esp_err_t app_audio_set_sample_rate(uint32_t sample_rate_hz)
     }
 
     s_sample_rate_hz = sample_rate_hz;
+    if (s_tx_enabled) {
+        esp_err_t disable_err = i2s_channel_disable(s_tx_chan);
+        if (disable_err != ESP_OK && disable_err != ESP_ERR_INVALID_STATE) {
+            ESP_LOGW(TAG, "disable TX before sample-rate switch failed: %s", esp_err_to_name(disable_err));
+        }
+        s_tx_enabled = false;
+    }
+    if (s_rx_enabled) {
+        esp_err_t disable_err = i2s_channel_disable(s_rx_chan);
+        if (disable_err != ESP_OK && disable_err != ESP_ERR_INVALID_STATE) {
+            ESP_LOGW(TAG, "disable RX before sample-rate switch failed: %s", esp_err_to_name(disable_err));
+        }
+        s_rx_enabled = false;
+    }
+    i2s_std_clk_config_t clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(s_sample_rate_hz);
+    esp_err_t err = i2s_channel_reconfig_std_clock(s_tx_chan, &clk_cfg);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "reconfig TX clock failed: %s", esp_err_to_name(err));
+        s_codec_open = false;
+        return err;
+    }
+    err = i2s_channel_reconfig_std_clock(s_rx_chan, &clk_cfg);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "reconfig RX clock failed: %s", esp_err_to_name(err));
+        s_codec_open = false;
+        return err;
+    }
+    err = i2s_channel_enable(s_tx_chan);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "reenable TX failed: %s", esp_err_to_name(err));
+        s_codec_open = false;
+        return err;
+    }
+    s_tx_enabled = true;
+    err = i2s_channel_enable(s_rx_chan);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "reenable RX failed: %s", esp_err_to_name(err));
+        s_codec_open = false;
+        return err;
+    }
+    s_rx_enabled = true;
+
     esp_codec_dev_sample_info_t sample_cfg = {};
     sample_cfg.bits_per_sample = I2S_DATA_BIT_WIDTH_16BIT;
     sample_cfg.channel = 2;
@@ -231,16 +295,59 @@ esp_err_t app_audio_set_sample_rate(uint32_t sample_rate_hz)
     return ESP_OK;
 }
 
+bool app_audio_acquire(app_audio_owner_t owner, uint32_t sample_rate_hz)
+{
+    if (owner == APP_AUDIO_OWNER_NONE || !app_audio_is_ready() || !s_audio_mutex) {
+        return false;
+    }
+    if (xSemaphoreTake(s_audio_mutex, pdMS_TO_TICKS(1000)) != pdTRUE) {
+        return false;
+    }
+    if (s_audio_owner != APP_AUDIO_OWNER_NONE && s_audio_owner != owner) {
+        xSemaphoreGive(s_audio_mutex);
+        return false;
+    }
+    if (app_audio_set_sample_rate(sample_rate_hz) != ESP_OK) {
+        xSemaphoreGive(s_audio_mutex);
+        return false;
+    }
+    s_audio_owner = owner;
+    xSemaphoreGive(s_audio_mutex);
+    return true;
+}
+
+void app_audio_release(app_audio_owner_t owner)
+{
+    if (!s_audio_mutex) {
+        return;
+    }
+    if (xSemaphoreTake(s_audio_mutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
+        if (s_audio_owner == owner) {
+            s_audio_owner = APP_AUDIO_OWNER_NONE;
+            if (owner == APP_AUDIO_OWNER_XIAOZHI) {
+                app_audio_set_sample_rate(AUDIO_SAMPLE_RATE_HZ);
+            }
+        }
+        xSemaphoreGive(s_audio_mutex);
+    }
+}
+
+app_audio_owner_t app_audio_owner(void)
+{
+    return s_audio_owner;
+}
+
 void app_audio_start(i2c_master_bus_handle_t i2c_bus)
 {
     if (s_audio_started) {
         return;
     }
     s_audio_started = true;
+    s_audio_mutex = xSemaphoreCreateMutex();
 
     init_amp_gpio();
     probe_codec(i2c_bus);
-    if (init_i2s_tx() == ESP_OK) {
+    if (init_i2s_duplex() == ESP_OK) {
         esp_err_t err = open_es8311(i2c_bus);
         if (err == ESP_OK) {
             ESP_LOGI(TAG, "audio foundation ready");
@@ -285,6 +392,31 @@ esp_err_t app_audio_write_pcm(const int16_t *samples, size_t sample_count, uint3
     return ESP_OK;
 }
 
+esp_err_t app_audio_read_mono(int16_t *samples, size_t frame_count, uint32_t timeout_ms)
+{
+    (void)timeout_ms;
+    if (!s_codec_dev || !s_codec_open || !samples || frame_count == 0 || !s_rx_enabled) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    static int16_t stereo_buf[512 * 2];
+    size_t remaining = frame_count;
+    int16_t *out = samples;
+    while (remaining > 0) {
+        const size_t frames = remaining > 512 ? 512 : remaining;
+        const int ret = esp_codec_dev_read(s_codec_dev, stereo_buf, frames * 2 * sizeof(int16_t));
+        if (ret != ESP_CODEC_DEV_OK) {
+            return ESP_FAIL;
+        }
+        for (size_t i = 0; i < frames; ++i) {
+            out[i] = stereo_buf[i * 2];
+        }
+        out += frames;
+        remaining -= frames;
+    }
+    return ESP_OK;
+}
+
 esp_err_t app_audio_play_test_tone(uint32_t frequency_hz, uint32_t duration_ms)
 {
     if (!app_audio_is_ready() || frequency_hz == 0 || duration_ms == 0) {
@@ -320,7 +452,7 @@ esp_err_t app_audio_play_test_tone(uint32_t frequency_hz, uint32_t duration_ms)
 
 bool app_audio_is_ready(void)
 {
-    return s_audio_started && s_tx_chan != NULL && s_codec_seen && s_codec_open;
+    return s_audio_started && s_tx_chan != NULL && s_rx_chan != NULL && s_codec_seen && s_codec_open;
 }
 
 void app_audio_set_stop_requested(bool stop)

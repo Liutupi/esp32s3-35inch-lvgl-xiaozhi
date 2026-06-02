@@ -10,6 +10,7 @@
 #include "app_time_weather.h"
 #include "app_radio.h"
 #include "app_audio.h"
+#include "app_xiaozhi.h"
 
 
 #define EXAMPLE_DISPLAY_ROTATION LV_DISP_ROT_90
@@ -54,6 +55,7 @@ extern "C" void app_main(void)
     app_audio_start(i2c_bus_handle);
     app_time_weather_start();
     app_radio_start();
+    app_xiaozhi_start();
 }
 
 static void touchpad_read(lv_indev_drv_t *indev_drv, lv_indev_data_t *data)

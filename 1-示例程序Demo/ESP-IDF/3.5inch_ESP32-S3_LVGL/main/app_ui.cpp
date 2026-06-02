@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "app_xiaozhi.h"
 #include "app_radio.h"
 #include "esp_log.h"
 #include "lv_port.h"
@@ -19,6 +20,7 @@ static const char *TAG = "app_ui";
 static lv_obj_t *main_page;
 static lv_obj_t *apps_page;
 static lv_obj_t *radio_page;
+static lv_obj_t *xiaozhi_page;
 static lv_obj_t *touch_label;
 static lv_obj_t *time_group;
 static lv_obj_t *clock_cards[4];
@@ -41,6 +43,14 @@ static lv_obj_t *status_bar_time_labels[2];
 static lv_obj_t *radio_station_label;
 static lv_obj_t *radio_state_label;
 static lv_obj_t *radio_meta_label;
+static lv_obj_t *xiaozhi_state_label;
+static lv_obj_t *xiaozhi_message_label;
+static lv_obj_t *xiaozhi_face;
+static lv_obj_t *xiaozhi_eye_l;
+static lv_obj_t *xiaozhi_eye_r;
+static lv_obj_t *xiaozhi_mouth;
+static lv_obj_t *xiaozhi_role_label;
+static lv_obj_t *xiaozhi_hint_label;
 static uint8_t clock_digits[4] = {1, 4, 2, 8};
 
 static lv_style_t style_screen;
@@ -102,6 +112,7 @@ static void show_main(void)
     lv_obj_clear_flag(main_page, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(apps_page, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(radio_page, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(xiaozhi_page, LV_OBJ_FLAG_HIDDEN);
     ESP_LOGI(TAG, "show main");
 }
 
@@ -110,6 +121,7 @@ static void show_apps(void)
     lv_obj_clear_flag(apps_page, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(main_page, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(radio_page, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(xiaozhi_page, LV_OBJ_FLAG_HIDDEN);
     ESP_LOGI(TAG, "show apps");
 }
 
@@ -118,7 +130,18 @@ static void show_radio(void)
     lv_obj_clear_flag(radio_page, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(main_page, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(apps_page, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(xiaozhi_page, LV_OBJ_FLAG_HIDDEN);
     ESP_LOGI(TAG, "show radio");
+}
+
+static void show_xiaozhi(void)
+{
+    ESP_LOGI(TAG, "show xiaozhi begin");
+    lv_obj_clear_flag(xiaozhi_page, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(main_page, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(apps_page, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(radio_page, LV_OBJ_FLAG_HIDDEN);
+    ESP_LOGI(TAG, "show xiaozhi done");
 }
 
 static void menu_event_cb(lv_event_t *event)
@@ -147,6 +170,27 @@ static void radio_tile_event_cb(lv_event_t *event)
 {
     if (lv_event_get_code(event) == LV_EVENT_CLICKED) {
         show_radio();
+    }
+}
+
+static void xiaozhi_tile_event_cb(lv_event_t *event)
+{
+    if (lv_event_get_code(event) == LV_EVENT_CLICKED) {
+        show_xiaozhi();
+    }
+}
+
+static void xiaozhi_back_event_cb(lv_event_t *event)
+{
+    if (lv_event_get_code(event) == LV_EVENT_CLICKED) {
+        show_apps();
+    }
+}
+
+static void xiaozhi_toggle_event_cb(lv_event_t *event)
+{
+    if (lv_event_get_code(event) == LV_EVENT_CLICKED) {
+        app_xiaozhi_toggle();
     }
 }
 
@@ -192,6 +236,19 @@ static void apps_gesture_cb(lv_event_t *event)
 }
 
 static void radio_gesture_cb(lv_event_t *event)
+{
+    if (lv_event_get_code(event) != LV_EVENT_GESTURE) {
+        return;
+    }
+
+    lv_indev_t *indev = lv_indev_get_act();
+    if (indev && lv_indev_get_gesture_dir(indev) == LV_DIR_RIGHT) {
+        ESP_LOGI(TAG, "right swipe -> apps");
+        show_apps();
+    }
+}
+
+static void xiaozhi_gesture_cb(lv_event_t *event)
 {
     if (lv_event_get_code(event) != LV_EVENT_GESTURE) {
         return;
@@ -641,6 +698,8 @@ static void create_app_tile(lv_obj_t *parent, uint8_t index, const AppRow *row)
     lv_obj_add_event_cb(box, apps_gesture_cb, LV_EVENT_GESTURE, NULL);
     if (index == 0) {
         lv_obj_add_event_cb(box, radio_tile_event_cb, LV_EVENT_CLICKED, NULL);
+    } else if (index == 2) {
+        lv_obj_add_event_cb(box, xiaozhi_tile_event_cb, LV_EVENT_CLICKED, NULL);
     }
     add_gesture_bubble(box);
 
@@ -752,6 +811,94 @@ static void create_radio_page(lv_obj_t *root)
     lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -12);
 }
 
+static void create_xiaozhi_page(lv_obj_t *root)
+{
+    xiaozhi_page = lv_obj_create(root);
+    lv_obj_add_style(xiaozhi_page, &style_screen, 0);
+    lv_obj_set_size(xiaozhi_page, LV_PCT(100), LV_PCT(100));
+    lv_obj_clear_flag(xiaozhi_page, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(xiaozhi_page, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_event_cb(xiaozhi_page, xiaozhi_gesture_cb, LV_EVENT_GESTURE, NULL);
+
+    lv_obj_t *brand = label_en(xiaozhi_page, "nothing impossible", &style_en);
+    lv_obj_set_style_text_font(brand, &lv_font_montserrat_20, 0);
+    lv_obj_align(brand, LV_ALIGN_TOP_LEFT, 18, 10);
+
+    create_status_bar(xiaozhi_page);
+
+    lv_obj_t *title = label_en(xiaozhi_page, "XiaoZhi AI", &style_en);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_20, 0);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 48);
+
+    lv_obj_t *back = create_button(xiaozhi_page, "Back", xiaozhi_back_event_cb);
+    lv_obj_align(back, LV_ALIGN_TOP_RIGHT, -22, 46);
+
+    lv_obj_t *top_line = lv_obj_create(xiaozhi_page);
+    lv_obj_remove_style_all(top_line);
+    lv_obj_set_size(top_line, 438, 1);
+    lv_obj_set_style_bg_color(top_line, COLOR_LINE, 0);
+    lv_obj_set_style_bg_opa(top_line, LV_OPA_COVER, 0);
+    lv_obj_align(top_line, LV_ALIGN_TOP_MID, 0, 78);
+    add_gesture_bubble(top_line);
+
+    xiaozhi_face = lv_obj_create(xiaozhi_page);
+    lv_obj_set_size(xiaozhi_face, 176, 176);
+    lv_obj_align(xiaozhi_face, LV_ALIGN_TOP_MID, 0, 88);
+    lv_obj_set_style_radius(xiaozhi_face, 88, 0);
+    lv_obj_set_style_bg_color(xiaozhi_face, LV_COLOR_MAKE(0x16, 0x19, 0x1c), 0);
+    lv_obj_set_style_border_color(xiaozhi_face, COLOR_GREEN, 0);
+    lv_obj_set_style_border_width(xiaozhi_face, 2, 0);
+    lv_obj_clear_flag(xiaozhi_face, LV_OBJ_FLAG_SCROLLABLE);
+    add_gesture_bubble(xiaozhi_face);
+
+    xiaozhi_eye_l = lv_obj_create(xiaozhi_face);
+    lv_obj_set_size(xiaozhi_eye_l, 30, 40);
+    lv_obj_align(xiaozhi_eye_l, LV_ALIGN_CENTER, -42, -18);
+    lv_obj_set_style_radius(xiaozhi_eye_l, 15, 0);
+    lv_obj_set_style_bg_color(xiaozhi_eye_l, COLOR_CREAM, 0);
+    lv_obj_set_style_border_width(xiaozhi_eye_l, 0, 0);
+    add_gesture_bubble(xiaozhi_eye_l);
+
+    xiaozhi_eye_r = lv_obj_create(xiaozhi_face);
+    lv_obj_set_size(xiaozhi_eye_r, 30, 40);
+    lv_obj_align(xiaozhi_eye_r, LV_ALIGN_CENTER, 42, -18);
+    lv_obj_set_style_radius(xiaozhi_eye_r, 15, 0);
+    lv_obj_set_style_bg_color(xiaozhi_eye_r, COLOR_CREAM, 0);
+    lv_obj_set_style_border_width(xiaozhi_eye_r, 0, 0);
+    add_gesture_bubble(xiaozhi_eye_r);
+
+    xiaozhi_mouth = lv_obj_create(xiaozhi_face);
+    lv_obj_set_size(xiaozhi_mouth, 62, 12);
+    lv_obj_align(xiaozhi_mouth, LV_ALIGN_CENTER, 0, 44);
+    lv_obj_set_style_radius(xiaozhi_mouth, 6, 0);
+    lv_obj_set_style_bg_color(xiaozhi_mouth, COLOR_GOLD, 0);
+    lv_obj_set_style_border_width(xiaozhi_mouth, 0, 0);
+    add_gesture_bubble(xiaozhi_mouth);
+
+    xiaozhi_state_label = label_en(xiaozhi_page, "Standby", &style_green);
+    lv_obj_set_style_text_font(xiaozhi_state_label, &lv_font_montserrat_20, 0);
+    lv_obj_align(xiaozhi_state_label, LV_ALIGN_TOP_MID, 0, 272);
+
+    xiaozhi_role_label = label_en(xiaozhi_page, "system", &style_gold);
+    lv_obj_set_style_text_font(xiaozhi_role_label, &lv_font_montserrat_12, 0);
+    lv_obj_align(xiaozhi_role_label, LV_ALIGN_TOP_MID, 0, 300);
+
+    xiaozhi_message_label = label_en(xiaozhi_page, "按住/点击开始对话", &style_muted);
+    lv_obj_set_width(xiaozhi_message_label, 420);
+    lv_label_set_long_mode(xiaozhi_message_label, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_align(xiaozhi_message_label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(xiaozhi_message_label, &lv_font_montserrat_16, 0);
+    lv_obj_align(xiaozhi_message_label, LV_ALIGN_TOP_MID, 0, 320);
+
+    xiaozhi_hint_label = label_en(xiaozhi_page, "Ready / Listening / Speaking", &style_muted);
+    lv_obj_set_style_text_font(xiaozhi_hint_label, &lv_font_montserrat_12, 0);
+    lv_obj_align(xiaozhi_hint_label, LV_ALIGN_BOTTOM_MID, 0, -58);
+
+    lv_obj_t *talk = create_button(xiaozhi_page, "Talk", xiaozhi_toggle_event_cb);
+    lv_obj_set_size(talk, 126, 38);
+    lv_obj_align(talk, LV_ALIGN_BOTTOM_MID, 0, -18);
+}
+
 void app_ui_create(void)
 {
     init_styles();
@@ -763,6 +910,7 @@ void app_ui_create(void)
     create_main_page(root);
     create_apps_page(root);
     create_radio_page(root);
+    create_xiaozhi_page(root);
 
     touch_label = label_en(root, "", &style_muted);
     lv_obj_add_flag(touch_label, LV_OBJ_FLAG_HIDDEN);
@@ -832,6 +980,60 @@ void app_ui_set_radio(const char *station, const char *state, const char *meta)
         lv_label_set_text(radio_station_label, station ? station : "Radio");
         lv_label_set_text(radio_state_label, state ? state : "Ready");
         lv_label_set_text(radio_meta_label, meta ? meta : "Network radio");
+        lvgl_port_unlock();
+    }
+}
+
+void app_ui_set_xiaozhi(const char *state, const char *message, const char *emotion)
+{
+    if (!xiaozhi_state_label || !xiaozhi_message_label || !xiaozhi_face || !xiaozhi_mouth || !xiaozhi_eye_l || !xiaozhi_eye_r) {
+        return;
+    }
+    if (lvgl_port_lock(50)) {
+        lv_label_set_text(xiaozhi_state_label, state ? state : "Standby");
+        lv_label_set_text(xiaozhi_message_label, message ? message : "");
+        if (xiaozhi_hint_label) {
+            lv_label_set_text(xiaozhi_hint_label, state ? state : "");
+        }
+
+        lv_color_t face_color = LV_COLOR_MAKE(0x16, 0x19, 0x1c);
+        lv_color_t accent = COLOR_GREEN;
+        lv_color_t mouth_color = COLOR_GOLD;
+        int16_t mouth_h = 12;
+        int16_t eye_h = 40;
+        const char *role = "system";
+        if (emotion && strcmp(emotion, "happy") == 0) {
+            face_color = LV_COLOR_MAKE(0x1c, 0x32, 0x28);
+            accent = COLOR_GREEN;
+            mouth_color = COLOR_GREEN;
+            mouth_h = 20;
+            role = "assistant";
+        } else if (emotion && strcmp(emotion, "sad") == 0) {
+            face_color = LV_COLOR_MAKE(0x30, 0x22, 0x28);
+            accent = LV_COLOR_MAKE(0xff, 0x79, 0x79);
+            mouth_color = LV_COLOR_MAKE(0xff, 0x79, 0x79);
+            mouth_h = 8;
+            eye_h = 24;
+        } else if (emotion && strcmp(emotion, "thinking") == 0) {
+            face_color = LV_COLOR_MAKE(0x24, 0x22, 0x34);
+            accent = COLOR_PURPLE;
+            mouth_color = COLOR_PURPLE;
+            role = "user";
+        }
+        if (xiaozhi_role_label) {
+            lv_label_set_text(xiaozhi_role_label, role);
+        }
+        lv_obj_set_style_bg_color(xiaozhi_face, face_color, 0);
+        lv_obj_set_style_border_color(xiaozhi_face, accent, 0);
+        lv_obj_set_style_bg_color(xiaozhi_eye_l, COLOR_CREAM, 0);
+        lv_obj_set_style_bg_color(xiaozhi_eye_r, COLOR_CREAM, 0);
+        lv_obj_set_height(xiaozhi_eye_l, eye_h);
+        lv_obj_set_height(xiaozhi_eye_r, eye_h);
+        lv_obj_align(xiaozhi_eye_l, LV_ALIGN_CENTER, -42, -18);
+        lv_obj_align(xiaozhi_eye_r, LV_ALIGN_CENTER, 42, -18);
+        lv_obj_set_style_bg_color(xiaozhi_mouth, mouth_color, 0);
+        lv_obj_set_height(xiaozhi_mouth, mouth_h);
+        lv_obj_align(xiaozhi_mouth, LV_ALIGN_CENTER, 0, 44);
         lvgl_port_unlock();
     }
 }
