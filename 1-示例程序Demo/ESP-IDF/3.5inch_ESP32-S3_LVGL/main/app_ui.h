@@ -13,6 +13,7 @@ void app_ui_set_network_status(const char *status);
 void app_ui_set_time(int hour, int minute, int month, int day, const char *weekday);
 void app_ui_set_daily_quote(const char *quote);
 void app_ui_set_weather(const char *temperature, const char *summary, int weather_code);
+void app_ui_set_radio(const char *station, const char *state, const char *meta);
 
 #ifdef __cplusplus
 }

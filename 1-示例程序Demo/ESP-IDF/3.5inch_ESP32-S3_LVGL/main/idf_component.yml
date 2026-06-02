@@ -1,4 +1,6 @@
 dependencies:
+  chmorgan/esp-libhelix-mp3: ^1.0.3
+  espressif/esp_codec_dev: ^1.3.4
   espressif/esp_lcd_st77922: "*"
   idf: ">=5.1"
   lvgl/lvgl: "~8.4.0"

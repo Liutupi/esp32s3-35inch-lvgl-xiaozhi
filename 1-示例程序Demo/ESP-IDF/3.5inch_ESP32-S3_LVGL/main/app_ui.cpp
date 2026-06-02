@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "app_radio.h"
 #include "esp_log.h"
 #include "lv_port.h"
 
@@ -11,11 +12,13 @@ LV_FONT_DECLARE(lv_font_montserrat_14);
 LV_FONT_DECLARE(lv_font_montserrat_16);
 LV_FONT_DECLARE(lv_font_montserrat_20);
 LV_FONT_DECLARE(lv_font_montserrat_48);
+LV_FONT_DECLARE(font_radio_cn_18);
 
 static const char *TAG = "app_ui";
 
 static lv_obj_t *main_page;
 static lv_obj_t *apps_page;
+static lv_obj_t *radio_page;
 static lv_obj_t *touch_label;
 static lv_obj_t *time_group;
 static lv_obj_t *clock_cards[4];
@@ -34,6 +37,10 @@ static lv_obj_t *weather_rain[3];
 static lv_obj_t *weather_bolt;
 static lv_obj_t *quote_label;
 static lv_obj_t *network_status_label;
+static lv_obj_t *status_bar_time_labels[2];
+static lv_obj_t *radio_station_label;
+static lv_obj_t *radio_state_label;
+static lv_obj_t *radio_meta_label;
 static uint8_t clock_digits[4] = {1, 4, 2, 8};
 
 static lv_style_t style_screen;
@@ -94,6 +101,7 @@ static void show_main(void)
 {
     lv_obj_clear_flag(main_page, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(apps_page, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(radio_page, LV_OBJ_FLAG_HIDDEN);
     ESP_LOGI(TAG, "show main");
 }
 
@@ -101,7 +109,16 @@ static void show_apps(void)
 {
     lv_obj_clear_flag(apps_page, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(main_page, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(radio_page, LV_OBJ_FLAG_HIDDEN);
     ESP_LOGI(TAG, "show apps");
+}
+
+static void show_radio(void)
+{
+    lv_obj_clear_flag(radio_page, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(main_page, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(apps_page, LV_OBJ_FLAG_HIDDEN);
+    ESP_LOGI(TAG, "show radio");
 }
 
 static void menu_event_cb(lv_event_t *event)
@@ -118,6 +135,49 @@ static void back_event_cb(lv_event_t *event)
     }
 }
 
+static void radio_back_event_cb(lv_event_t *event)
+{
+    if (lv_event_get_code(event) == LV_EVENT_CLICKED) {
+        app_radio_stop();
+        show_apps();
+    }
+}
+
+static void radio_tile_event_cb(lv_event_t *event)
+{
+    if (lv_event_get_code(event) == LV_EVENT_CLICKED) {
+        show_radio();
+    }
+}
+
+static void radio_play_event_cb(lv_event_t *event)
+{
+    if (lv_event_get_code(event) == LV_EVENT_CLICKED) {
+        app_radio_play_pause();
+    }
+}
+
+static void radio_stop_event_cb(lv_event_t *event)
+{
+    if (lv_event_get_code(event) == LV_EVENT_CLICKED) {
+        app_radio_stop();
+    }
+}
+
+static void radio_next_event_cb(lv_event_t *event)
+{
+    if (lv_event_get_code(event) == LV_EVENT_CLICKED) {
+        app_radio_next();
+    }
+}
+
+static void radio_prev_event_cb(lv_event_t *event)
+{
+    if (lv_event_get_code(event) == LV_EVENT_CLICKED) {
+        app_radio_prev();
+    }
+}
+
 static void apps_gesture_cb(lv_event_t *event)
 {
     if (lv_event_get_code(event) != LV_EVENT_GESTURE) {
@@ -128,6 +188,19 @@ static void apps_gesture_cb(lv_event_t *event)
     if (indev && lv_indev_get_gesture_dir(indev) == LV_DIR_RIGHT) {
         ESP_LOGI(TAG, "right swipe -> home");
         show_main();
+    }
+}
+
+static void radio_gesture_cb(lv_event_t *event)
+{
+    if (lv_event_get_code(event) != LV_EVENT_GESTURE) {
+        return;
+    }
+
+    lv_indev_t *indev = lv_indev_get_act();
+    if (indev && lv_indev_get_gesture_dir(indev) == LV_DIR_RIGHT) {
+        ESP_LOGI(TAG, "right swipe -> apps");
+        show_apps();
     }
 }
 
@@ -225,9 +298,15 @@ static void create_status_bar(lv_obj_t *parent)
     lv_obj_t *wifi = label_en(parent, "WiFi", &style_green);
     lv_obj_align(wifi, LV_ALIGN_TOP_RIGHT, -168, 12);
 
-    lv_obj_t *time = label_en(parent, "14:28", &style_en);
+    lv_obj_t *time = label_en(parent, "--:--", &style_en);
     lv_obj_set_style_text_font(time, &lv_font_montserrat_20, 0);
     lv_obj_align(time, LV_ALIGN_TOP_RIGHT, -86, 9);
+    for (size_t i = 0; i < sizeof(status_bar_time_labels) / sizeof(status_bar_time_labels[0]); ++i) {
+        if (!status_bar_time_labels[i]) {
+            status_bar_time_labels[i] = time;
+            break;
+        }
+    }
 
     lv_obj_t *battery = label_en(parent, "80%", &style_green);
     lv_obj_align(battery, LV_ALIGN_TOP_RIGHT, -20, 12);
@@ -560,6 +639,9 @@ static void create_app_tile(lv_obj_t *parent, uint8_t index, const AppRow *row)
     lv_obj_align(box, LV_ALIGN_TOP_LEFT, x, y);
     lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_event_cb(box, apps_gesture_cb, LV_EVENT_GESTURE, NULL);
+    if (index == 0) {
+        lv_obj_add_event_cb(box, radio_tile_event_cb, LV_EVENT_CLICKED, NULL);
+    }
     add_gesture_bubble(box);
 
     lv_obj_t *cn = label_en(box, row->cn, &style_en);
@@ -612,6 +694,64 @@ static void create_apps_page(lv_obj_t *root)
     lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -6);
 }
 
+static void create_radio_page(lv_obj_t *root)
+{
+    radio_page = lv_obj_create(root);
+    lv_obj_add_style(radio_page, &style_screen, 0);
+    lv_obj_set_size(radio_page, LV_PCT(100), LV_PCT(100));
+    lv_obj_clear_flag(radio_page, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(radio_page, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_event_cb(radio_page, radio_gesture_cb, LV_EVENT_GESTURE, NULL);
+
+    lv_obj_t *brand = label_en(radio_page, "nothing impossible", &style_en);
+    lv_obj_set_style_text_font(brand, &lv_font_montserrat_20, 0);
+    lv_obj_align(brand, LV_ALIGN_TOP_LEFT, 18, 10);
+
+    create_status_bar(radio_page);
+
+    lv_obj_t *title = label_en(radio_page, "Radio", &style_en);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_20, 0);
+    lv_obj_align(title, LV_ALIGN_TOP_LEFT, 24, 50);
+
+    lv_obj_t *sub = label_en(radio_page, "Network FM", &style_muted);
+    lv_obj_align(sub, LV_ALIGN_TOP_LEFT, 94, 55);
+
+    lv_obj_t *back = create_button(radio_page, "Back", radio_back_event_cb);
+    lv_obj_align(back, LV_ALIGN_TOP_RIGHT, -22, 45);
+
+    lv_obj_t *panel = create_panel(radio_page, 432, 134, 24, 88);
+    lv_obj_set_style_bg_color(panel, COLOR_SURFACE_2, 0);
+
+    radio_station_label = label_en(panel, "CNR中国之声", &style_gold);
+    lv_obj_set_style_text_font(radio_station_label, &font_radio_cn_18, 0);
+    lv_obj_align(radio_station_label, LV_ALIGN_TOP_LEFT, 16, 14);
+
+    radio_state_label = label_en(panel, "Ready", &style_green);
+    lv_obj_set_style_text_font(radio_state_label, &lv_font_montserrat_20, 0);
+    lv_obj_align(radio_state_label, LV_ALIGN_TOP_LEFT, 16, 52);
+
+    radio_meta_label = label_en(panel, "Tap Play to probe MP3 stream", &style_muted);
+    lv_obj_set_width(radio_meta_label, 390);
+    lv_label_set_long_mode(radio_meta_label, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_font(radio_meta_label, &lv_font_montserrat_14, 0);
+    lv_obj_align(radio_meta_label, LV_ALIGN_BOTTOM_LEFT, 16, -14);
+
+    lv_obj_t *prev = create_button(radio_page, "Prev", radio_prev_event_cb);
+    lv_obj_align(prev, LV_ALIGN_TOP_LEFT, 24, 238);
+
+    lv_obj_t *play = create_button(radio_page, "Play", radio_play_event_cb);
+    lv_obj_align(play, LV_ALIGN_TOP_LEFT, 136, 238);
+
+    lv_obj_t *stop = create_button(radio_page, "Stop", radio_stop_event_cb);
+    lv_obj_align(stop, LV_ALIGN_TOP_LEFT, 248, 238);
+
+    lv_obj_t *next = create_button(radio_page, "Next", radio_next_event_cb);
+    lv_obj_align(next, LV_ALIGN_TOP_LEFT, 360, 238);
+
+    lv_obj_t *hint = label_en(radio_page, "HTTP stream probe first. Audio output comes next.", &style_muted);
+    lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -12);
+}
+
 void app_ui_create(void)
 {
     init_styles();
@@ -622,6 +762,7 @@ void app_ui_create(void)
 
     create_main_page(root);
     create_apps_page(root);
+    create_radio_page(root);
 
     touch_label = label_en(root, "", &style_muted);
     lv_obj_add_flag(touch_label, LV_OBJ_FLAG_HIDDEN);
@@ -656,10 +797,17 @@ void app_ui_set_time(int hour, int minute, int month, int day, const char *weekd
     }
     if (lvgl_port_lock(0)) {
         char date_text[24];
+        char time_text[8];
         snprintf(date_text, sizeof(date_text), "%02d / %02d     |", month, day);
+        snprintf(time_text, sizeof(time_text), "%02d:%02d", hour, minute);
         render_big_time(hour, minute, true);
         lv_label_set_text(date_label, date_text);
         lv_label_set_text(week_label, weekday ? weekday : "---");
+        for (size_t i = 0; i < sizeof(status_bar_time_labels) / sizeof(status_bar_time_labels[0]); ++i) {
+            if (status_bar_time_labels[i]) {
+                lv_label_set_text(status_bar_time_labels[i], time_text);
+            }
+        }
         lvgl_port_unlock();
     }
 }
@@ -671,6 +819,19 @@ void app_ui_set_daily_quote(const char *quote)
     }
     if (lvgl_port_lock(0)) {
         lv_label_set_text(quote_label, quote);
+        lvgl_port_unlock();
+    }
+}
+
+void app_ui_set_radio(const char *station, const char *state, const char *meta)
+{
+    if (!radio_station_label || !radio_state_label || !radio_meta_label) {
+        return;
+    }
+    if (lvgl_port_lock(0)) {
+        lv_label_set_text(radio_station_label, station ? station : "Radio");
+        lv_label_set_text(radio_state_label, state ? state : "Ready");
+        lv_label_set_text(radio_meta_label, meta ? meta : "Network radio");
         lvgl_port_unlock();
     }
 }

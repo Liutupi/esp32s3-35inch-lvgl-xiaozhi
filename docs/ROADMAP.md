@@ -46,6 +46,8 @@ Target behavior:
 
 Avoid mixing too many stream formats at once. Bring up one reliable MP3 stream first, then extend.
 
+Detailed plan: `docs/NETWORK_RADIO_PLAN.md`
+
 ## Phase 5: XiaoZhi AI
 
 Target behavior:

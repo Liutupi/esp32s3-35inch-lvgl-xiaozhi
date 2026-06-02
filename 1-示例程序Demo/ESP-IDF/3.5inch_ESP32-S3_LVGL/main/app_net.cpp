@@ -680,6 +680,7 @@ void app_net_start(void)
         ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_set_bandwidth(WIFI_IF_STA, WIFI_BW_HT20));
     }
     ESP_ERROR_CHECK(esp_wifi_start());
+    ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_set_ps(WIFI_PS_NONE));
     ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_set_max_tx_power(84));
     ESP_LOGI(TAG, "setup AP started: SSID=%s auth=open channel=%d ip=%s", PORTAL_SSID, ap_config.ap.channel, PORTAL_IP);
 
