@@ -26,6 +26,7 @@ static bool s_tx_enabled;
 static bool s_codec_seen;
 static bool s_codec_open;
 static uint32_t s_sample_rate_hz = AUDIO_SAMPLE_RATE_HZ;
+static volatile bool s_stop_requested;
 
 void app_audio_set_amp_enabled(bool enabled)
 {
@@ -257,8 +258,31 @@ esp_err_t app_audio_write_pcm(const int16_t *samples, size_t sample_count, uint3
         return ESP_ERR_INVALID_STATE;
     }
 
-    const int ret = esp_codec_dev_write(s_codec_dev, (void *)samples, sample_count * sizeof(int16_t));
-    return ret == ESP_CODEC_DEV_OK ? ESP_OK : ESP_FAIL;
+    if (s_stop_requested) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    // Write in smaller chunks to allow stop checking
+    static const size_t CHUNK_SIZE = 512; // samples per chunk
+    size_t remaining = sample_count;
+    const int16_t *ptr = samples;
+
+    while (remaining > 0) {
+        if (s_stop_requested) {
+            return ESP_ERR_INVALID_STATE;
+        }
+
+        size_t to_write = remaining > CHUNK_SIZE ? CHUNK_SIZE : remaining;
+        const int ret = esp_codec_dev_write(s_codec_dev, (void *)ptr, to_write * sizeof(int16_t));
+        if (ret != ESP_CODEC_DEV_OK) {
+            return ESP_FAIL;
+        }
+
+        ptr += to_write;
+        remaining -= to_write;
+    }
+
+    return ESP_OK;
 }
 
 esp_err_t app_audio_play_test_tone(uint32_t frequency_hz, uint32_t duration_ms)
@@ -297,4 +321,31 @@ esp_err_t app_audio_play_test_tone(uint32_t frequency_hz, uint32_t duration_ms)
 bool app_audio_is_ready(void)
 {
     return s_audio_started && s_tx_chan != NULL && s_codec_seen && s_codec_open;
+}
+
+void app_audio_set_stop_requested(bool stop)
+{
+    s_stop_requested = stop;
+}
+
+bool app_audio_is_stop_requested(void)
+{
+    return s_stop_requested;
+}
+
+void app_audio_mute_output(void)
+{
+    if (s_codec_dev && s_codec_open) {
+        esp_codec_dev_set_out_mute(s_codec_dev, true);
+    }
+    app_audio_set_amp_enabled(false);
+}
+
+void app_audio_unmute_output(void)
+{
+    if (s_codec_dev && s_codec_open) {
+        esp_codec_dev_set_out_mute(s_codec_dev, false);
+        esp_codec_dev_set_out_vol(s_codec_dev, 75);
+    }
+    app_audio_set_amp_enabled(true);
 }

@@ -17,6 +17,10 @@ esp_err_t app_audio_write_pcm(const int16_t *samples, size_t sample_count, uint3
 esp_err_t app_audio_play_test_tone(uint32_t frequency_hz, uint32_t duration_ms);
 void app_audio_set_amp_enabled(bool enabled);
 bool app_audio_is_ready(void);
+void app_audio_set_stop_requested(bool stop);
+bool app_audio_is_stop_requested(void);
+void app_audio_mute_output(void);
+void app_audio_unmute_output(void);
 
 #ifdef __cplusplus
 }

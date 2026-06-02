@@ -71,6 +71,7 @@ static QueueHandle_t s_radio_queue;
 static bool s_radio_started;
 static bool s_play_requested;
 static int s_station_index;
+static volatile bool s_stop_requested;
 
 static void post_command(RadioCommand command)
 {
@@ -104,20 +105,31 @@ static void handle_command(RadioCommand command)
     switch (command) {
     case RADIO_CMD_PLAY_PAUSE:
         s_play_requested = !s_play_requested;
+        if (s_play_requested) {
+            s_stop_requested = false;
+            app_audio_set_stop_requested(false);
+        }
         set_station_ui(s_play_requested ? "Connecting" : "Paused", s_play_requested ? "Opening stream" : "Stopped");
         break;
     case RADIO_CMD_STOP:
         s_play_requested = false;
+        s_stop_requested = true;
+        app_audio_set_stop_requested(true);
+        app_audio_mute_output();
         set_station_ui("Stopped", "Ready");
         break;
     case RADIO_CMD_NEXT:
         next_station(1);
         s_play_requested = true;
+        s_stop_requested = false;
+        app_audio_set_stop_requested(false);
         set_station_ui("Connecting", "Next station");
         break;
     case RADIO_CMD_PREV:
         next_station(-1);
         s_play_requested = true;
+        s_stop_requested = false;
+        app_audio_set_stop_requested(false);
         set_station_ui("Connecting", "Previous station");
         break;
     default:
@@ -173,8 +185,11 @@ static void radio_reader_task(void *arg)
 static bool wait_start_buffer(RadioReaderContext *ctx)
 {
     const TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(6000);
-    while (s_play_requested && !ctx->failed && app_net_is_connected()) {
+    while (s_play_requested && !s_stop_requested && !ctx->failed && app_net_is_connected()) {
         if (check_interrupt_commands()) {
+            return false;
+        }
+        if (s_stop_requested) {
             return false;
         }
         size_t available = xStreamBufferBytesAvailable(ctx->stream);
@@ -239,6 +254,10 @@ static void amplify_pcm(int16_t *pcm, size_t samples)
 
 static bool write_frame_pcm(int16_t *pcm, const MP3FrameInfo *info)
 {
+    if (s_stop_requested || app_audio_is_stop_requested()) {
+        return false;
+    }
+
     if (info->samprate <= 0 || app_audio_set_sample_rate(info->samprate) != ESP_OK) {
         ESP_LOGW(TAG, "unsupported sample rate %d", info->samprate);
         set_station_ui("Unsupported", "Bad sample rate");
@@ -372,14 +391,19 @@ static bool stream_play_url(const RadioStation *station, const char *url, int ur
 
     if (!wait_start_buffer(&reader)) {
         reader.stop = true;
+    } else {
+        app_audio_unmute_output();
     }
 
     uint8_t *read_ptr = read_buffer;
     int bytes_left = 0;
     int decoded_frames = 0;
     int decode_errors = 0;
-    while (s_play_requested && !reader.stop) {
+    while (s_play_requested && !reader.stop && !s_stop_requested && !app_audio_is_stop_requested()) {
         if (check_interrupt_commands()) {
+            break;
+        }
+        if (s_stop_requested || app_audio_is_stop_requested()) {
             break;
         }
         if (!app_net_is_connected()) {
@@ -456,6 +480,14 @@ static bool stream_play_url(const RadioStation *station, const char *url, int ur
     for (int i = 0; i < 40 && !reader.done; ++i) {
         vTaskDelay(pdMS_TO_TICKS(50));
     }
+
+    app_audio_mute_output();
+
+    int16_t silence[512] = {};
+    for (int i = 0; i < 4; ++i) {
+        app_audio_write_pcm(silence, 512, 100);
+    }
+
     MP3FreeDecoder(decoder);
     vStreamBufferDelete(stream_buffer);
     heap_caps_free(read_buffer);
@@ -469,7 +501,12 @@ static void stream_play_mp3(void)
 {
     const RadioStation *station = &RADIO_STATIONS[s_station_index];
     bool tried_any = false;
-    for (int i = 0; i < 3 && s_play_requested; ++i) {
+    
+    // Reset stop flags when starting playback
+    s_stop_requested = false;
+    app_audio_set_stop_requested(false);
+    
+    for (int i = 0; i < 3 && s_play_requested && !s_stop_requested; ++i) {
         const char *url = station->urls[i];
         if (!url) {
             continue;
@@ -534,6 +571,9 @@ void app_radio_play_pause(void)
 
 void app_radio_stop(void)
 {
+    s_stop_requested = true;
+    app_audio_set_stop_requested(true);
+    app_audio_mute_output();
     post_command(RADIO_CMD_STOP);
 }
 
