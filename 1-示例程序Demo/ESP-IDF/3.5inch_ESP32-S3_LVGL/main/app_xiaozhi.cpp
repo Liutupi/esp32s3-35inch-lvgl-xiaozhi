@@ -186,16 +186,14 @@ static bool fetch_config(XiaozhiConfig &config, std::string &activation)
         ota_url = OTA_URL;
     }
     EspHttp http;
-    http.SetTimeout(8000);
     http.SetHeader("Activation-Version", "1");
     http.SetHeader("Device-Id", mac_string());
     http.SetHeader("Client-Id", uuid);
     http.SetHeader("User-Agent", std::string(BOARD_NAME) + "/1.0.0");
     http.SetHeader("Accept-Language", "zh-CN");
     http.SetHeader("Content-Type", "application/json");
-    http.SetContent(board_json(uuid));
 
-    if (!http.Open("POST", ota_url)) {
+    if (!http.Open("POST", ota_url, board_json(uuid))) {
         ESP_LOGE(TAG, "open OTA config failed");
         return false;
     }
@@ -205,8 +203,9 @@ static bool fetch_config(XiaozhiConfig &config, std::string &activation)
         http.Close();
         return false;
     }
-    std::string body = http.ReadAll();
+    std::string body = http.GetBody();
     http.Close();
+    ESP_LOGI(TAG, "OTA response received, free heap=%lu", (unsigned long)esp_get_free_heap_size());
 
     cJSON *root = cJSON_Parse(body.c_str());
     if (!root) {
@@ -276,7 +275,12 @@ static void send_text(const std::string &text)
 static void cleanup_websocket()
 {
     if (s_ws) {
-        s_ws->Close();
+        /* Only send close frame if still connected */
+        if (s_ws->IsConnected()) {
+            s_ws->Close();
+        }
+        /* Give receive thread time to exit before destroying */
+        vTaskDelay(pdMS_TO_TICKS(200));
         delete s_ws;
         s_ws = nullptr;
     }
@@ -383,6 +387,10 @@ static bool open_websocket(const XiaozhiConfig &config)
     delete s_ws;
     s_ws = nullptr;
 
+    /* Allow OTA TLS context to be fully freed before opening WebSocket TLS */
+    vTaskDelay(pdMS_TO_TICKS(500));
+    ESP_LOGI(TAG, "before WS connect: free heap=%lu", (unsigned long)esp_get_free_heap_size());
+
     Transport *transport = nullptr;
     if (config.url.rfind("wss://", 0) == 0) {
         transport = new TlsTransport();
@@ -391,6 +399,9 @@ static bool open_websocket(const XiaozhiConfig &config)
     }
     s_ws = new WebSocket(transport);
     s_ws->SetReceiveBufferSize(4096);
+    ESP_LOGI(TAG, "free heap=%lu, min=%lu",
+             (unsigned long)esp_get_free_heap_size(),
+             (unsigned long)esp_get_minimum_free_heap_size());
     if (!config.token.empty()) {
         std::string bearer = config.token.find(' ') == std::string::npos ? "Bearer " + config.token : config.token;
         s_ws->SetHeader("Authorization", bearer.c_str());
@@ -503,7 +514,7 @@ static void xiaozhi_task(void *)
         app_audio_mute_output();
         send_listen_state("start", "manual");
         set_state(APP_XIAOZHI_STATE_LISTENING, "我在听", "neutral");
-        xTaskCreate(send_audio_loop, "xiaozhi_audio_tx", 8192, nullptr, 5, nullptr);
+        xTaskCreate(send_audio_loop, "xiaozhi_audio_tx", 16384, nullptr, 5, nullptr);
 
         while (s_started && s_ws && s_ws->IsConnected()) {
             vTaskDelay(pdMS_TO_TICKS(100));
@@ -523,7 +534,7 @@ void app_xiaozhi_start(void)
         s_events = xEventGroupCreate();
     }
     if (!s_task) {
-        xTaskCreate(xiaozhi_task, "xiaozhi", 12288, nullptr, 4, &s_task);
+        xTaskCreate(xiaozhi_task, "xiaozhi", 16384, nullptr, 4, &s_task);
     }
     set_state(APP_XIAOZHI_STATE_IDLE, "按住/点击开始对话", "neutral");
 }

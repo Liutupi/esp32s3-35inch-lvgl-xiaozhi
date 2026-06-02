@@ -32,6 +32,7 @@ static uint32_t s_sample_rate_hz = AUDIO_SAMPLE_RATE_HZ;
 static volatile bool s_stop_requested;
 static SemaphoreHandle_t s_audio_mutex;
 static app_audio_owner_t s_audio_owner = APP_AUDIO_OWNER_NONE;
+static bool s_rx_needed;
 
 void app_audio_set_amp_enabled(bool enabled)
 {
@@ -118,14 +119,10 @@ static esp_err_t init_i2s_duplex(void)
         return err;
     }
     s_tx_enabled = true;
-    err = i2s_channel_enable(s_rx_chan);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "i2s RX enable failed: %s", esp_err_to_name(err));
-        return err;
-    }
-    s_rx_enabled = true;
+    /* RX stays disabled at boot to avoid mic noise leaking to output.
+       It will be enabled on demand when XiaoZhi acquires audio. */
 
-    ESP_LOGI(TAG, "I2S duplex ready mclk=%d bclk=%d lrck=%d dout=%d din=%d slot=32",
+    ESP_LOGI(TAG, "I2S ready mclk=%d bclk=%d lrck=%d dout=%d din=%d slot=32 (RX deferred)",
              PIN_I2S_MCLK, PIN_I2S_BCLK, PIN_I2S_LRCK, PIN_I2S_DOUT, PIN_I2S_DIN);
     return ESP_OK;
 }
@@ -266,13 +263,15 @@ esp_err_t app_audio_set_sample_rate(uint32_t sample_rate_hz)
         return err;
     }
     s_tx_enabled = true;
-    err = i2s_channel_enable(s_rx_chan);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "reenable RX failed: %s", esp_err_to_name(err));
-        s_codec_open = false;
-        return err;
+    if (s_rx_needed) {
+        err = i2s_channel_enable(s_rx_chan);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "reenable RX failed: %s", esp_err_to_name(err));
+            s_codec_open = false;
+            return err;
+        }
+        s_rx_enabled = true;
     }
-    s_rx_enabled = true;
 
     esp_codec_dev_sample_info_t sample_cfg = {};
     sample_cfg.bits_per_sample = I2S_DATA_BIT_WIDTH_16BIT;
@@ -307,6 +306,16 @@ bool app_audio_acquire(app_audio_owner_t owner, uint32_t sample_rate_hz)
         xSemaphoreGive(s_audio_mutex);
         return false;
     }
+    /* Enable RX for owners that need the microphone (XiaoZhi) */
+    if (owner == APP_AUDIO_OWNER_XIAOZHI) {
+        s_rx_needed = true;
+        if (!s_rx_enabled && s_rx_chan) {
+            if (i2s_channel_enable(s_rx_chan) == ESP_OK) {
+                s_rx_enabled = true;
+                ESP_LOGI(TAG, "I2S RX enabled for mic capture");
+            }
+        }
+    }
     if (app_audio_set_sample_rate(sample_rate_hz) != ESP_OK) {
         xSemaphoreGive(s_audio_mutex);
         return false;
@@ -326,6 +335,13 @@ void app_audio_release(app_audio_owner_t owner)
             s_audio_owner = APP_AUDIO_OWNER_NONE;
             if (owner == APP_AUDIO_OWNER_XIAOZHI) {
                 app_audio_set_sample_rate(AUDIO_SAMPLE_RATE_HZ);
+                /* Disable RX to stop mic DMA and eliminate noise */
+                s_rx_needed = false;
+                if (s_rx_enabled && s_rx_chan) {
+                    i2s_channel_disable(s_rx_chan);
+                    s_rx_enabled = false;
+                    ESP_LOGI(TAG, "I2S RX disabled after XiaoZhi release");
+                }
             }
         }
         xSemaphoreGive(s_audio_mutex);
